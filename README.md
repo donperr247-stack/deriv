@@ -1,0 +1,2 @@
+# deriv
+deriv trading robot
