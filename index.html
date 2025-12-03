@@ -115,6 +115,8 @@
             const ws = useRef(null);
             const priceHistory = useRef([]);
             const isRunning = useRef(false);
+            const currentContractId = useRef(null);
+            const isTrading = useRef(false);
 
             const addLog = (message, type = 'info') => {
                 setLogs(prev => [...prev.slice(-50), { 
