@@ -223,7 +223,7 @@
                     if (data.authorize) {
                         setConnected(true);
                         setBalance(data.authorize.balance);
-                        addLog(`Authorized. Balance: $${data.authorize.balance}`, 'success');
+                        addLog(`Authorized. Balance: ${data.authorize.balance}`, 'success');
                         ws.current.send(JSON.stringify({ 
                             ticks: 'R_75',
                             subscribe: 1
@@ -242,8 +242,91 @@
                         }
                     }
 
+                    // Handle proposal response (contract price quote)
+                    if (data.proposal) {
+                        const proposalId = data.proposal.id;
+                        const askPrice = data.proposal.ask_price;
+                        
+                        addLog(`Proposal received - Ask price: ${askPrice}`, 'info');
+                        
+                        // Buy the contract
+                        const buyRequest = {
+                            buy: proposalId,
+                            price: askPrice
+                        };
+                        
+                        addLog(`Buying contract...`, 'info');
+                        ws.current.send(JSON.stringify(buyRequest));
+                    }
+
+                    // Handle buy response (contract purchased)
+                    if (data.buy) {
+                        const contractId = data.buy.contract_id;
+                        const buyPrice = data.buy.buy_price;
+                        
+                        addLog(`Contract purchased! ID: ${contractId}, Price: ${buyPrice}`, 'success');
+                        
+                        // Update balance
+                        setBalance(data.buy.balance_after);
+                        
+                        // Subscribe to contract updates to know when it settles
+                        ws.current.send(JSON.stringify({
+                            proposal_open_contract: 1,
+                            contract_id: contractId,
+                            subscribe: 1
+                        }));
+                    }
+
+                    // Handle contract result updates
+                    if (data.proposal_open_contract) {
+                        const contract = data.proposal_open_contract;
+                        
+                        // Only process if contract is sold/closed
+                        if (contract.status === 'sold' || contract.is_sold) {
+                            const profit = parseFloat(contract.profit);
+                            const win = profit > 0;
+                            
+                            addLog(
+                                `Contract closed - ${win ? 'WON' : 'LOST'}: ${profit >= 0 ? '+' : ''}${profit.toFixed(2)}`,
+                                win ? 'success' : 'error'
+                            );
+                            
+                            // Update balance
+                            setBalance(parseFloat(contract.balance_after || contract.account_balance));
+                            
+                            // Update stats
+                            setStats(prev => ({
+                                wins: prev.wins + (win ? 1 : 0),
+                                losses: prev.losses + (win ? 0 : 1),
+                                profit: prev.profit + profit
+                            }));
+
+                            // Update trade in history
+                            setTrades(prev => prev.map(t => {
+                                if (t.status === 'pending' && !t.processed) {
+                                    return { ...t, status: win ? 'win' : 'loss', payout: profit, processed: true };
+                                }
+                                return t;
+                            }));
+
+                            // Calculate next stake based on result
+                            calculateNextStake(win);
+                        } else {
+                            // Contract still open
+                            addLog(`Contract in progress - Current P&L: ${contract.profit?.toFixed(2) || '0.00'}`, 'info');
+                        }
+                    }
+
                     if (data.error) {
                         addLog(`Error: ${data.error.message}`, 'error');
+                        
+                        // If there's an error, reset the trade as failed
+                        setTrades(prev => prev.map(t => {
+                            if (t.status === 'pending' && !t.processed) {
+                                return { ...t, status: 'error', payout: 0, processed: true };
+                            }
+                            return t;
+                        }));
                     }
                 };
 
@@ -265,21 +348,27 @@
                 
                 if (signal && balance >= currentStake) {
                     if (stats.profit <= -strategy.stopLoss) {
-                        addLog(`Stop loss hit: $${stats.profit.toFixed(2)}`, 'error');
+                        addLog(`Stop loss hit: ${stats.profit.toFixed(2)}`, 'error');
                         stopBot();
                         return;
                     }
                     
                     if (stats.profit >= strategy.targetProfit) {
-                        addLog(`Target profit reached: $${stats.profit.toFixed(2)}`, 'success');
+                        addLog(`Target profit reached: ${stats.profit.toFixed(2)}`, 'success');
                         stopBot();
                         return;
                     }
 
                     if (currentStake > balance) {
-                        addLog(`Insufficient balance for stake $${currentStake.toFixed(2)}`, 'error');
+                        addLog(`Insufficient balance for stake ${currentStake.toFixed(2)}`, 'error');
                         stopBot();
                         return;
+                    }
+
+                    // Check if we already have a pending trade
+                    const hasPendingTrade = trades.some(t => t.status === 'pending' && !t.processed);
+                    if (hasPendingTrade) {
+                        return; // Don't open new trade while one is pending
                     }
 
                     executeTrade(signal.action);
@@ -298,34 +387,30 @@
                     status: 'pending'
                 };
 
-                addLog(`Opening ${contractType} position - Stake: $${currentStake.toFixed(2)} (Step: ${martingaleStep})`, 'info');
+                addLog(`Opening ${contractType} position - Stake: ${currentStake.toFixed(2)} (Step: ${martingaleStep})`, 'info');
                 setTrades(prev => [trade, ...prev.slice(0, 19)]);
 
-                setTimeout(() => {
-                    const win = Math.random() > 0.48; // 52% win rate for demo
-                    const payout = win ? currentStake * 0.95 : -currentStake;
-                    
-                    setBalance(prev => prev + payout);
-                    setStats(prev => ({
-                        wins: prev.wins + (win ? 1 : 0),
-                        losses: prev.losses + (win ? 0 : 1),
-                        profit: prev.profit + payout
-                    }));
+                // Step 1: Get contract proposal (price quote)
+                const proposalRequest = {
+                    proposal: 1,
+                    amount: currentStake,
+                    basis: 'stake',
+                    contract_type: contractType,
+                    currency: 'USD',
+                    duration: 5,
+                    duration_unit: 't', // ticks
+                    symbol: 'R_75'
+                };
 
-                    setTrades(prev => prev.map(t => 
-                        t.id === trade.id 
-                            ? { ...t, status: win ? 'win' : 'loss', payout }
-                            : t
-                    ));
+                addLog(`Requesting contract proposal for ${contractType}...`, 'info');
+                ws.current.send(JSON.stringify(proposalRequest));
 
-                    addLog(
-                        `Trade ${win ? 'WON' : 'LOST'}: ${payout > 0 ? '+' : ''}$${payout.toFixed(2)}`,
-                        win ? 'success' : 'error'
-                    );
-
-                    // Calculate next stake based on result
-                    calculateNextStake(win);
-                }, 5000);
+                // Store trade info for when we get the proposal response
+                trade.pendingProposal = true;
+                
+                // We'll handle the actual buy in the onmessage handler
+                // Store current trade in a ref so we can access it
+                window.currentPendingTrade = trade;
             };
 
             const startBot = () => {
