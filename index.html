@@ -117,6 +117,7 @@
             const isRunning = useRef(false);
             const currentContractId = useRef(null);
             const isTrading = useRef(false);
+            const lastTradeTime = useRef(0);
 
             const addLog = (message, type = 'info') => {
                 setLogs(prev => [...prev.slice(-50), { 
@@ -322,10 +323,14 @@
                     if (data.error) {
                         addLog(`Error: ${data.error.message}`, 'error');
                         
-                        // If there's an error, reset the trade as failed
-                        setTrades(prev => prev.map(t => {
-                            if (t.status === 'pending' && !t.processed) {
-                                return { ...t, status: 'error', payout: 0, processed: true };
+                        // Release trading lock on error
+                        isTrading.current = false;
+                        currentContractId.current = null;
+                        
+                        // Mark latest pending trade as error
+                        setTrades(prev => prev.map((t, idx) => {
+                            if (idx === 0 && t.status === 'pending') {
+                                return { ...t, status: 'error', payout: 0 };
                             }
                             return t;
                         }));
@@ -421,9 +426,12 @@
                     return;
                 }
                 
-                // Reset martingale on start
+                // Reset everything on start
                 setMartingaleStep(0);
                 setCurrentStake(strategy.baseStake);
+                isTrading.current = false;
+                currentContractId.current = null;
+                lastTradeTime.current = 0;
                 
                 setRunning(true);
                 isRunning.current = true;
@@ -436,9 +444,12 @@
             const stopBot = () => {
                 setRunning(false);
                 isRunning.current = false;
+                isTrading.current = false;
+                currentContractId.current = null;
+                lastTradeTime.current = 0;
                 setMartingaleStep(0);
                 setCurrentStake(strategy.baseStake);
-                addLog('Bot stopped', 'info');
+                addLog('Bot stopped - All flags reset', 'info');
             };
 
             const winRate = stats.wins + stats.losses > 0 
