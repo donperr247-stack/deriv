@@ -44,6 +44,8 @@
             const priceHistory = useRef([]);
             const activeContract = useRef(null);
             const runningRef = useRef(false);
+            const currentStakeRef = useRef(10);
+            const martingaleStepRef = useRef(0);
 
             const log = (msg, type = 'info') => {
                 const colors = { success: '🟢', error: '🔴', info: '🔵', warn: '🟡' };
@@ -219,10 +221,10 @@
                             setTrades(prev => [{
                                 id: Date.now(),
                                 type: contract.contract_type,
-                                stake: parseFloat(contract.buy_price || currentStake),
+                                stake: parseFloat(contract.buy_price || currentStakeRef.current),
                                 payout: profit,
                                 status: won ? 'win' : 'loss',
-                                martingaleStep: martingaleStep,
+                                martingaleStep: martingaleStepRef.current,
                                 time: new Date().toLocaleTimeString()
                             }, ...prev.slice(0, 19)]);
 
