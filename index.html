@@ -114,19 +114,24 @@
             const handleTradeResult = (won) => {
                 if (won) {
                     log(`✅ WIN! Resetting martingale to base stake ${config.baseStake}`, 'success');
+                    martingaleStepRef.current = 0;
+                    currentStakeRef.current = config.baseStake;
                     setMartingaleStep(0);
                     setCurrentStake(config.baseStake);
                 } else {
                     if (!config.martingaleEnabled) {
                         log(`Martingale disabled - keeping base stake ${config.baseStake}`, 'info');
+                        currentStakeRef.current = config.baseStake;
                         setCurrentStake(config.baseStake);
                         return;
                     }
                     
-                    const nextStep = martingaleStep + 1;
+                    const nextStep = martingaleStepRef.current + 1;
                     
                     if (nextStep > config.maxMartingaleSteps) {
                         log(`⚠️ Max martingale steps (${config.maxMartingaleSteps}) reached! Resetting to base stake`, 'error');
+                        martingaleStepRef.current = 0;
+                        currentStakeRef.current = config.baseStake;
                         setMartingaleStep(0);
                         setCurrentStake(config.baseStake);
                         return;
@@ -137,8 +142,10 @@
                         config.maxStake
                     );
                     
-                    log(`❌ LOSS! Martingale step ${martingaleStep} → ${nextStep}: ${currentStake.toFixed(2)} → ${newStake.toFixed(2)}`, 'error');
+                    log(`❌ LOSS! Martingale step ${martingaleStepRef.current} → ${nextStep}: ${currentStakeRef.current.toFixed(2)} → ${newStake.toFixed(2)}`, 'error');
                     
+                    martingaleStepRef.current = nextStep;
+                    currentStakeRef.current = newStake;
                     setMartingaleStep(nextStep);
                     setCurrentStake(newStake);
                 }
@@ -172,8 +179,8 @@
                         priceHistory.current.push(price);
                         if (priceHistory.current.length > 100) priceHistory.current.shift();
 
-                        // Check immediately when we have enough data
-                        if (runningRef.current && tradingState === 'IDLE') {
+                        // Only check for trades if we're truly idle (no active contract)
+                        if (runningRef.current && !activeContract.current && tradingState === 'IDLE') {
                             const minRequired = Math.max(config.rsiPeriod + 1, config.maPeriod);
                             if (priceHistory.current.length >= minRequired) {
                                 checkForTrade();
@@ -190,8 +197,8 @@
 
                     if (data.buy) {
                         activeContract.current = data.buy.contract_id;
-                        log(`Contract purchased: ${data.buy.contract_id}`, 'success');
-                        setBalance(data.buy.balance_after);
+                        log(`✅ Contract purchased: ${data.buy.contract_id}`, 'success');
+                        setBalance(parseFloat(data.buy.balance_after));
                         setTradingState('TRADING');
                         
                         ws.current.send(JSON.stringify({
@@ -229,7 +236,6 @@
                             }, ...prev.slice(0, 19)]);
 
                             // Handle martingale BEFORE resetting state
-                            const currentStep = martingaleStep;
                             handleTradeResult(won);
                             
                             activeContract.current = null;
@@ -237,7 +243,7 @@
                             
                             setTimeout(() => {
                                 setTradingState('IDLE');
-                                log(`Ready for next trade (Stake: ${won ? config.baseStake : currentStake})`, 'info');
+                                log(`Ready for next trade (Stake: $${currentStakeRef.current.toFixed(2)})`, 'info');
                             }, 3000);
                         }
                     }
@@ -263,7 +269,10 @@
             };
 
             const checkForTrade = () => {
-                if (tradingState !== 'IDLE') return;
+                // Prevent multiple trades - must be completely idle
+                if (tradingState !== 'IDLE' || activeContract.current) {
+                    return;
+                }
                 
                 if (stats.profit <= -config.stopLoss) {
                     log(`Stop loss hit: $${stats.profit.toFixed(2)}`, 'error');
@@ -277,8 +286,8 @@
                     return;
                 }
 
-                if (currentStake > balance) {
-                    log(`Insufficient balance for $${currentStake} stake`, 'error');
+                if (currentStakeRef.current > balance) {
+                    log(`Insufficient balance for $${currentStakeRef.current} stake`, 'error');
                     stopBot();
                     return;
                 }
@@ -288,15 +297,19 @@
             };
 
             const executeTrade = (type) => {
-                if (tradingState !== 'IDLE') return;
+                // Double check we're not already in a trade
+                if (tradingState !== 'IDLE' || activeContract.current) {
+                    log(`⚠️ Skipping trade - already in position`, 'warn');
+                    return;
+                }
                 
                 setTradingState('OPENING');
                 
-                log(`🚀 Opening ${type} - Stake: ${currentStake.toFixed(2)} | Martingale Step: ${martingaleStep}`, 'info');
+                log(`🚀 Opening ${type} - Stake: $${currentStakeRef.current.toFixed(2)} | Martingale Step: ${martingaleStepRef.current}`, 'info');
                 
                 ws.current.send(JSON.stringify({
                     proposal: 1,
-                    amount: currentStake,
+                    amount: currentStakeRef.current,
                     basis: 'stake',
                     contract_type: type,
                     currency: 'USD',
@@ -317,6 +330,8 @@
                 }
                 
                 // Reset martingale
+                martingaleStepRef.current = 0;
+                currentStakeRef.current = config.baseStake;
                 setMartingaleStep(0);
                 setCurrentStake(config.baseStake);
                 activeContract.current = null;
@@ -327,7 +342,7 @@
                 log('✅ Bot started! Waiting for signals...', 'success');
                 log(`📊 Strategy: RSI(${config.rsiPeriod}) < ${config.rsiOversold} or > ${config.rsiOverbought}, MA(${config.maPeriod})`, 'info');
                 log(`💰 Martingale: ${config.martingaleEnabled ? `${config.martingaleMultiplier}x up to ${config.maxMartingaleSteps} steps` : 'DISABLED'}`, 'info');
-                log(`🎯 Starting stake: ${config.baseStake}`, 'info');
+                log(`🎯 Starting stake: $${config.baseStake}`, 'info');
             };
 
             const stopBot = () => {
@@ -393,6 +408,7 @@
                                             const val = parseFloat(e.target.value);
                                             setConfig(prev => ({ ...prev, baseStake: val }));
                                             setCurrentStake(val);
+                                            currentStakeRef.current = val;
                                         }}
                                         className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
                                         disabled={running}
