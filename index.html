@@ -32,9 +32,9 @@
                 martingaleMultiplier: 2,
                 maxMartingaleSteps: 5,
                 rsiPeriod: 14,
-                rsiOversold: 30,
-                rsiOverbought: 70,
-                maPeriod: 20,
+                rsiOversold: 40,
+                rsiOverbought: 60,
+                maPeriod: 10,
                 stopLoss: 500,
                 targetProfit: 200,
                 maxStake: 1000
@@ -78,19 +78,31 @@
 
             const getSignal = () => {
                 const prices = priceHistory.current;
-                if (prices.length < Math.max(config.rsiPeriod + 1, config.maPeriod)) return null;
+                const minRequired = Math.max(config.rsiPeriod + 1, config.maPeriod);
+                
+                if (prices.length < minRequired) {
+                    if (prices.length % 5 === 0) {
+                        log(`Collecting price data: ${prices.length}/${minRequired}`, 'info');
+                    }
+                    return null;
+                }
 
                 const rsi = calculateRSI(prices, config.rsiPeriod);
                 const sma = calculateSMA(prices, config.maPeriod);
                 const currentPrice = prices[prices.length - 1];
 
+                // Log market conditions every 10 ticks when running
+                if (runningRef.current && prices.length % 10 === 0) {
+                    log(`Market: Price=${currentPrice.toFixed(5)} | RSI=${rsi.toFixed(1)} | SMA=${sma.toFixed(5)}`, 'info');
+                }
+
                 if (rsi < config.rsiOversold && currentPrice < sma) {
-                    log(`Signal: CALL | RSI: ${rsi.toFixed(2)} | Price: ${currentPrice.toFixed(5)} < SMA: ${sma.toFixed(5)}`, 'info');
+                    log(`🚀 CALL Signal! RSI=${rsi.toFixed(1)} < ${config.rsiOversold} & Price=${currentPrice.toFixed(5)} < SMA=${sma.toFixed(5)}`, 'success');
                     return 'CALL';
                 }
                 
                 if (rsi > config.rsiOverbought && currentPrice > sma) {
-                    log(`Signal: PUT | RSI: ${rsi.toFixed(2)} | Price: ${currentPrice.toFixed(5)} > SMA: ${sma.toFixed(5)}`, 'info');
+                    log(`🚀 PUT Signal! RSI=${rsi.toFixed(1)} > ${config.rsiOverbought} & Price=${currentPrice.toFixed(5)} > SMA=${sma.toFixed(5)}`, 'success');
                     return 'PUT';
                 }
 
@@ -99,11 +111,12 @@
 
             const handleTradeResult = (won) => {
                 if (won) {
+                    log(`✅ WIN! Resetting martingale to base stake ${config.baseStake}`, 'success');
                     setMartingaleStep(0);
                     setCurrentStake(config.baseStake);
-                    log(`✅ WIN! Martingale RESET to $${config.baseStake}`, 'success');
                 } else {
                     if (!config.martingaleEnabled) {
+                        log(`Martingale disabled - keeping base stake ${config.baseStake}`, 'info');
                         setCurrentStake(config.baseStake);
                         return;
                     }
@@ -111,7 +124,7 @@
                     const nextStep = martingaleStep + 1;
                     
                     if (nextStep > config.maxMartingaleSteps) {
-                        log(`⚠️ Max martingale steps reached! Resetting to base stake`, 'error');
+                        log(`⚠️ Max martingale steps (${config.maxMartingaleSteps}) reached! Resetting to base stake`, 'error');
                         setMartingaleStep(0);
                         setCurrentStake(config.baseStake);
                         return;
@@ -122,9 +135,10 @@
                         config.maxStake
                     );
                     
+                    log(`❌ LOSS! Martingale step ${martingaleStep} → ${nextStep}: ${currentStake.toFixed(2)} → ${newStake.toFixed(2)}`, 'error');
+                    
                     setMartingaleStep(nextStep);
                     setCurrentStake(newStake);
-                    log(`❌ LOSS! Martingale step ${nextStep}: Next stake = $${newStake.toFixed(2)}`, 'error');
                 }
             };
 
@@ -156,8 +170,12 @@
                         priceHistory.current.push(price);
                         if (priceHistory.current.length > 100) priceHistory.current.shift();
 
-                        if (runningRef.current && tradingState === 'IDLE' && priceHistory.current.length >= 30) {
-                            checkForTrade();
+                        // Check immediately when we have enough data
+                        if (runningRef.current && tradingState === 'IDLE') {
+                            const minRequired = Math.max(config.rsiPeriod + 1, config.maPeriod);
+                            if (priceHistory.current.length >= minRequired) {
+                                checkForTrade();
+                            }
                         }
                     }
 
@@ -201,19 +219,23 @@
                             setTrades(prev => [{
                                 id: Date.now(),
                                 type: contract.contract_type,
-                                stake: currentStake,
+                                stake: parseFloat(contract.buy_price || currentStake),
                                 payout: profit,
                                 status: won ? 'win' : 'loss',
                                 martingaleStep: martingaleStep,
                                 time: new Date().toLocaleTimeString()
                             }, ...prev.slice(0, 19)]);
 
+                            // Handle martingale BEFORE resetting state
+                            const currentStep = martingaleStep;
                             handleTradeResult(won);
+                            
                             activeContract.current = null;
                             setTradingState('WAITING');
                             
                             setTimeout(() => {
                                 setTradingState('IDLE');
+                                log(`Ready for next trade (Stake: ${won ? config.baseStake : currentStake})`, 'info');
                             }, 3000);
                         }
                     }
@@ -267,7 +289,8 @@
                 if (tradingState !== 'IDLE') return;
                 
                 setTradingState('OPENING');
-                log(`Opening ${type} - Stake: $${currentStake.toFixed(2)} (Martingale Step: ${martingaleStep})`, 'info');
+                
+                log(`🚀 Opening ${type} - Stake: ${currentStake.toFixed(2)} | Martingale Step: ${martingaleStep}`, 'info');
                 
                 ws.current.send(JSON.stringify({
                     proposal: 1,
@@ -286,13 +309,23 @@
                     log('Please connect first', 'error');
                     return;
                 }
+                
+                if (priceHistory.current.length < Math.max(config.rsiPeriod + 1, config.maPeriod)) {
+                    log(`Collecting price data... Need ${Math.max(config.rsiPeriod + 1, config.maPeriod)} ticks, have ${priceHistory.current.length}`, 'warn');
+                }
+                
+                // Reset martingale
                 setMartingaleStep(0);
                 setCurrentStake(config.baseStake);
                 activeContract.current = null;
                 setTradingState('IDLE');
                 setRunning(true);
                 runningRef.current = true;
-                log('Bot started!', 'success');
+                
+                log('✅ Bot started! Waiting for signals...', 'success');
+                log(`📊 Strategy: RSI(${config.rsiPeriod}) < ${config.rsiOversold} or > ${config.rsiOverbought}, MA(${config.maPeriod})`, 'info');
+                log(`💰 Martingale: ${config.martingaleEnabled ? `${config.martingaleMultiplier}x up to ${config.maxMartingaleSteps} steps` : 'DISABLED'}`, 'info');
+                log(`🎯 Starting stake: ${config.baseStake}`, 'info');
             };
 
             const stopBot = () => {
@@ -345,9 +378,10 @@
                                     className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
                                     disabled={connected}
                                 />
+                                <p className="text-xs text-gray-400 mt-1">Make sure to enable "Trade" permission</p>
                             </div>
 
-                            <div className="grid md:grid-cols-3 gap-4 mb-4">
+                            <div className="grid md:grid-cols-4 gap-4 mb-4">
                                 <div>
                                     <label className="block text-sm text-gray-300 mb-2">Base Stake ($)</label>
                                     <input
@@ -379,6 +413,49 @@
                                         type="number"
                                         value={config.maxMartingaleSteps}
                                         onChange={(e) => setConfig(prev => ({ ...prev, maxMartingaleSteps: parseInt(e.target.value) }))}
+                                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
+                                        disabled={running}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm text-gray-300 mb-2">MA Period</label>
+                                    <input
+                                        type="number"
+                                        value={config.maPeriod}
+                                        onChange={(e) => setConfig(prev => ({ ...prev, maPeriod: parseInt(e.target.value) }))}
+                                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
+                                        disabled={running}
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid md:grid-cols-3 gap-4 mb-4">
+                                <div>
+                                    <label className="block text-sm text-gray-300 mb-2">RSI Oversold (Buy below)</label>
+                                    <input
+                                        type="number"
+                                        value={config.rsiOversold}
+                                        onChange={(e) => setConfig(prev => ({ ...prev, rsiOversold: parseInt(e.target.value) }))}
+                                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
+                                        disabled={running}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm text-gray-300 mb-2">RSI Overbought (Sell above)</label>
+                                    <input
+                                        type="number"
+                                        value={config.rsiOverbought}
+                                        onChange={(e) => setConfig(prev => ({ ...prev, rsiOverbought: parseInt(e.target.value) }))}
+                                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
+                                        disabled={running}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm text-gray-300 mb-2">RSI Period</label>
+                                    <input
+                                        type="number"
+                                        value={config.rsiPeriod}
+                                        onChange={(e) => setConfig(prev => ({ ...prev, rsiPeriod: parseInt(e.target.value) }))}
                                         className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
                                         disabled={running}
                                     />
