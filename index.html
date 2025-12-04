@@ -36,8 +36,10 @@
                 rsiOverbought: 60,
                 maPeriod: 10,
                 stopLoss: 500,
-                targetProfit: 200,
-                maxStake: 1000
+                takeProfit: 200,
+                maxStake: 1000,
+                tpEnabled: true,
+                slEnabled: true
             });
 
             const ws = useRef(null);
@@ -129,7 +131,8 @@
                     const nextStep = martingaleStepRef.current + 1;
                     
                     if (nextStep > config.maxMartingaleSteps) {
-                        log(`⚠️ Max martingale steps (${config.maxMartingaleSteps}) reached! Resetting to base stake`, 'error');
+                        log(`🛑 MAX MARTINGALE STEPS REACHED! Stopping bot to prevent further losses.`, 'error');
+                        stopBot();
                         martingaleStepRef.current = 0;
                         currentStakeRef.current = config.baseStake;
                         setMartingaleStep(0);
@@ -274,20 +277,22 @@
                     return;
                 }
                 
-                if (stats.profit <= -config.stopLoss) {
-                    log(`Stop loss hit: $${stats.profit.toFixed(2)}`, 'error');
+                // Stop Loss check
+                if (config.slEnabled && stats.profit <= -config.stopLoss) {
+                    log(`🛑 STOP LOSS HIT: ${stats.profit.toFixed(2)} / -${config.stopLoss}`, 'error');
                     stopBot();
                     return;
                 }
                 
-                if (stats.profit >= config.targetProfit) {
-                    log(`Target profit reached: $${stats.profit.toFixed(2)}`, 'success');
+                // Take Profit check
+                if (config.tpEnabled && stats.profit >= config.takeProfit) {
+                    log(`🎯 TAKE PROFIT HIT: ${stats.profit.toFixed(2)} / +${config.takeProfit}`, 'success');
                     stopBot();
                     return;
                 }
 
                 if (currentStakeRef.current > balance) {
-                    log(`Insufficient balance for $${currentStakeRef.current} stake`, 'error');
+                    log(`Insufficient balance for ${currentStakeRef.current} stake`, 'error');
                     stopBot();
                     return;
                 }
@@ -342,7 +347,8 @@
                 log('✅ Bot started! Waiting for signals...', 'success');
                 log(`📊 Strategy: RSI(${config.rsiPeriod}) < ${config.rsiOversold} or > ${config.rsiOverbought}, MA(${config.maPeriod})`, 'info');
                 log(`💰 Martingale: ${config.martingaleEnabled ? `${config.martingaleMultiplier}x up to ${config.maxMartingaleSteps} steps` : 'DISABLED'}`, 'info');
-                log(`🎯 Starting stake: $${config.baseStake}`, 'info');
+                log(`🎯 Starting stake: ${config.baseStake}`, 'info');
+                log(`📈 TP: ${config.tpEnabled ? `+${config.takeProfit}` : 'OFF'} | SL: ${config.slEnabled ? `-${config.stopLoss}` : 'OFF'}`, 'info');
             };
 
             const stopBot = () => {
@@ -477,6 +483,49 @@
                                         className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
                                         disabled={running}
                                     />
+                                </div>
+                            </div>
+
+                            <div className="grid md:grid-cols-2 gap-4 mb-4">
+                                <div className="bg-gray-700/50 rounded p-3">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={config.tpEnabled}
+                                            onChange={(e) => setConfig(prev => ({ ...prev, tpEnabled: e.target.checked }))}
+                                            className="w-4 h-4"
+                                            disabled={running}
+                                        />
+                                        <label className="text-sm text-gray-300 font-semibold">Take Profit ($)</label>
+                                    </div>
+                                    <input
+                                        type="number"
+                                        value={config.takeProfit}
+                                        onChange={(e) => setConfig(prev => ({ ...prev, takeProfit: parseFloat(e.target.value) }))}
+                                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
+                                        disabled={running || !config.tpEnabled}
+                                    />
+                                    <p className="text-xs text-gray-400 mt-1">Bot stops when profit reaches this amount</p>
+                                </div>
+                                <div className="bg-gray-700/50 rounded p-3">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={config.slEnabled}
+                                            onChange={(e) => setConfig(prev => ({ ...prev, slEnabled: e.target.checked }))}
+                                            className="w-4 h-4"
+                                            disabled={running}
+                                        />
+                                        <label className="text-sm text-gray-300 font-semibold">Stop Loss ($)</label>
+                                    </div>
+                                    <input
+                                        type="number"
+                                        value={config.stopLoss}
+                                        onChange={(e) => setConfig(prev => ({ ...prev, stopLoss: parseFloat(e.target.value) }))}
+                                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
+                                        disabled={running || !config.slEnabled}
+                                    />
+                                    <p className="text-xs text-gray-400 mt-1">Bot stops when loss reaches this amount</p>
                                 </div>
                             </div>
 
