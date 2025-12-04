@@ -14,62 +14,191 @@
     <script type="text/babel">
         const { useState, useRef } = React;
 
+        // Icons
+        const TrendingUp = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline>
+                <polyline points="17 6 23 6 23 12"></polyline>
+            </svg>
+        );
+
+        const TrendingDown = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="23 18 13.5 8.5 8.5 13.5 1 6"></polyline>
+                <polyline points="17 18 23 18 23 12"></polyline>
+            </svg>
+        );
+
+        const Activity = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+            </svg>
+        );
+
+        const DollarSign = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="12" y1="1" x2="12" y2="23"></line>
+                <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+            </svg>
+        );
+
+        const AlertTriangle = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                <line x1="12" y1="9" x2="12" y2="13"></line>
+                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+        );
+
+        const Play = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+        );
+
+        const Square = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            </svg>
+        );
+
+        const Settings = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M12 1v6m0 6v6"></path>
+            </svg>
+        );
+
+        const Layers = ({ size = 24 }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                <polyline points="2 17 12 22 22 17"></polyline>
+                <polyline points="2 12 12 17 22 12"></polyline>
+            </svg>
+        );
+
         const DerivBot = () => {
             const [connected, setConnected] = useState(false);
             const [running, setRunning] = useState(false);
             const [balance, setBalance] = useState(10000);
+            const [trades, setTrades] = useState([]);
             const [stats, setStats] = useState({ wins: 0, losses: 0, profit: 0 });
             const [apiToken, setApiToken] = useState('');
+            const [showSettings, setShowSettings] = useState(true);
             const [logs, setLogs] = useState([]);
             const [martingaleStep, setMartingaleStep] = useState(0);
             const [currentStake, setCurrentStake] = useState(10);
-            const [tradingState, setTradingState] = useState('IDLE'); // IDLE or BUSY
+            const [tradingState, setTradingState] = useState('IDLE');
             
-            const [config, setConfig] = useState({
+            const [strategy, setStrategy] = useState({
                 baseStake: 10,
-                multiplier: 2,
-                maxSteps: 5,
+                martingaleEnabled: true,
+                martingaleMultiplier: 2,
+                maxMartingaleSteps: 5,
+                rsiPeriod: 14,
+                rsiOversold: 30,
+                rsiOverbought: 70,
+                maPeriod: 20,
                 stopLoss: 500,
-                targetProfit: 200
+                targetProfit: 200,
+                maxStake: 1000
             });
 
             const ws = useRef(null);
             const priceHistory = useRef([]);
             const activeContract = useRef(null);
+            const runningRef = useRef(false);
 
             const log = (msg, type = 'info') => {
                 console.log(`[${type}]`, msg);
-                setLogs(prev => [...prev.slice(-30), { time: new Date().toLocaleTimeString(), msg, type }]);
+                setLogs(prev => [...prev.slice(-50), { time: new Date().toLocaleTimeString(), msg, type }]);
             };
 
-            const calculateRSI = (prices) => {
-                if (prices.length < 15) return 50;
+            const calculateRSI = (prices, period = 14) => {
+                if (prices.length < period + 1) return 50;
                 let gains = 0, losses = 0;
-                for (let i = prices.length - 14; i < prices.length; i++) {
+                for (let i = prices.length - period; i < prices.length; i++) {
                     const diff = prices[i] - prices[i - 1];
                     if (diff > 0) gains += diff;
                     else losses += Math.abs(diff);
                 }
-                const avgGain = gains / 14;
-                const avgLoss = losses / 14;
+                const avgGain = gains / period;
+                const avgLoss = losses / period;
                 if (avgLoss === 0) return 100;
                 const rs = avgGain / avgLoss;
                 return 100 - (100 / (1 + rs));
             };
 
+            const calculateSMA = (prices, period = 20) => {
+                if (prices.length < period) return prices[prices.length - 1];
+                const slice = prices.slice(-period);
+                return slice.reduce((a, b) => a + b, 0) / period;
+            };
+
             const getSignal = () => {
-                if (priceHistory.current.length < 30) return null;
-                const rsi = calculateRSI(priceHistory.current);
-                if (rsi < 30) return 'CALL';
-                if (rsi > 70) return 'PUT';
+                const prices = priceHistory.current;
+                if (prices.length < Math.max(strategy.rsiPeriod + 1, strategy.maPeriod)) {
+                    return null;
+                }
+
+                const rsi = calculateRSI(prices, strategy.rsiPeriod);
+                const sma = calculateSMA(prices, strategy.maPeriod);
+                const currentPrice = prices[prices.length - 1];
+
+                if (rsi < strategy.rsiOversold && currentPrice < sma) {
+                    log(`Signal: CALL (RSI: ${rsi.toFixed(2)}, Price: ${currentPrice.toFixed(5)}, SMA: ${sma.toFixed(5)})`, 'info');
+                    return 'CALL';
+                }
+                
+                if (rsi > strategy.rsiOverbought && currentPrice > sma) {
+                    log(`Signal: PUT (RSI: ${rsi.toFixed(2)}, Price: ${currentPrice.toFixed(5)}, SMA: ${sma.toFixed(5)})`, 'info');
+                    return 'PUT';
+                }
+
                 return null;
             };
 
+            const handleTradeResult = (won) => {
+                if (won) {
+                    setMartingaleStep(0);
+                    setCurrentStake(strategy.baseStake);
+                    log(`✅ WIN! Martingale RESET to $${strategy.baseStake}`, 'success');
+                } else {
+                    if (!strategy.martingaleEnabled) {
+                        setCurrentStake(strategy.baseStake);
+                        return;
+                    }
+                    
+                    const nextStep = martingaleStep + 1;
+                    
+                    if (nextStep > strategy.maxMartingaleSteps) {
+                        log(`⚠️ Max martingale steps reached! Resetting`, 'error');
+                        setMartingaleStep(0);
+                        setCurrentStake(strategy.baseStake);
+                        return;
+                    }
+                    
+                    const newStake = Math.min(
+                        strategy.baseStake * Math.pow(strategy.martingaleMultiplier, nextStep),
+                        strategy.maxStake
+                    );
+                    
+                    setMartingaleStep(nextStep);
+                    setCurrentStake(newStake);
+                    log(`❌ LOSS! Martingale step ${nextStep}: Next stake = $${newStake.toFixed(2)}`, 'error');
+                }
+            };
+
             const connect = () => {
+                if (!apiToken) {
+                    log('Please enter API token', 'error');
+                    return;
+                }
+
                 ws.current = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=1089');
                 
                 ws.current.onopen = () => {
-                    log('Connected', 'success');
+                    log('🔌 Connected to Deriv', 'success');
                     ws.current.send(JSON.stringify({ authorize: apiToken }));
                 };
 
@@ -79,28 +208,37 @@
                     if (data.authorize) {
                         setConnected(true);
                         setBalance(data.authorize.balance);
-                        log(`Authorized. Balance: $${data.authorize.balance}`, 'success');
+                        log(`✅ Authorized! Balance: $${data.authorize.balance}`, 'success');
                         ws.current.send(JSON.stringify({ ticks: 'R_75', subscribe: 1 }));
                     }
 
                     if (data.tick) {
-                        priceHistory.current.push(parseFloat(data.tick.quote));
-                        if (priceHistory.current.length > 100) priceHistory.current.shift();
-                        
-                        if (running && tradingState === 'IDLE') {
-                            const signal = getSignal();
-                            if (signal) executeTrade(signal);
+                        const price = parseFloat(data.tick.quote);
+                        priceHistory.current.push(price);
+                        if (priceHistory.current.length > 100) {
+                            priceHistory.current.shift();
+                        }
+
+                        // Check for trade if running and idle
+                        if (runningRef.current && tradingState === 'IDLE' && priceHistory.current.length >= 30) {
+                            checkForTrade();
                         }
                     }
 
                     if (data.proposal) {
-                        ws.current.send(JSON.stringify({ buy: data.proposal.id, price: data.proposal.ask_price }));
+                        ws.current.send(JSON.stringify({
+                            buy: data.proposal.id,
+                            price: data.proposal.ask_price
+                        }));
+                        log(`📋 Proposal: $${data.proposal.ask_price}`, 'info');
                     }
 
                     if (data.buy) {
                         activeContract.current = data.buy.contract_id;
-                        log(`Contract ${data.buy.contract_id} bought`, 'success');
+                        log(`💰 Contract ${data.buy.contract_id} purchased!`, 'success');
                         setBalance(data.buy.balance_after);
+                        setTradingState('TRADING');
+                        
                         ws.current.send(JSON.stringify({
                             proposal_open_contract: 1,
                             contract_id: data.buy.contract_id,
@@ -112,13 +250,18 @@
                         const contract = data.proposal_open_contract;
                         
                         // ONLY process OUR active contract
-                        if (contract.contract_id !== activeContract.current) return;
+                        if (contract.contract_id !== activeContract.current) {
+                            return;
+                        }
                         
                         if (contract.status === 'sold' || contract.is_sold) {
                             const profit = parseFloat(contract.profit);
                             const won = profit > 0;
                             
-                            log(`${won ? 'WON' : 'LOST'}: ${profit >= 0 ? '+' : ''}$${profit.toFixed(2)}`, won ? 'success' : 'error');
+                            log(
+                                `🏁 Contract closed: ${won ? 'WON' : 'LOST'} ${profit >= 0 ? '+' : ''}$${profit.toFixed(2)}`,
+                                won ? 'success' : 'error'
+                            );
                             
                             setBalance(parseFloat(contract.balance_after));
                             setStats(prev => ({
@@ -127,56 +270,80 @@
                                 profit: prev.profit + profit
                             }));
 
-                            // Handle Martingale
-                            if (won) {
-                                setMartingaleStep(0);
-                                setCurrentStake(config.baseStake);
-                                log(`✅ Martingale RESET to $${config.baseStake}`, 'success');
-                            } else {
-                                const nextStep = martingaleStep + 1;
-                                if (nextStep > config.maxSteps) {
-                                    setMartingaleStep(0);
-                                    setCurrentStake(config.baseStake);
-                                    log(`⚠️ Max steps reached! Reset to $${config.baseStake}`, 'error');
-                                } else {
-                                    const newStake = config.baseStake * Math.pow(config.multiplier, nextStep);
-                                    setMartingaleStep(nextStep);
-                                    setCurrentStake(newStake);
-                                    log(`❌ Martingale Step ${nextStep}: Next stake = $${newStake.toFixed(2)}`, 'error');
-                                }
-                            }
+                            setTrades(prev => [{
+                                id: Date.now(),
+                                type: contract.contract_type,
+                                stake: currentStake,
+                                payout: profit,
+                                status: won ? 'win' : 'loss',
+                                martingaleStep: martingaleStep,
+                                time: new Date().toLocaleTimeString()
+                            }, ...prev.slice(0, 19)]);
 
-                            // Reset and wait
+                            handleTradeResult(won);
+                            
                             activeContract.current = null;
-                            setTradingState('BUSY');
+                            setTradingState('WAITING');
+                            
                             setTimeout(() => {
                                 setTradingState('IDLE');
-                                log('Ready for next trade', 'info');
+                                log('✓ Ready for next trade', 'info');
                             }, 3000);
                         }
                     }
 
                     if (data.error) {
-                        log(`Error: ${data.error.message}`, 'error');
+                        log(`❌ Error: ${data.error.message}`, 'error');
                         activeContract.current = null;
                         setTradingState('IDLE');
                     }
+                };
+
+                ws.current.onerror = () => {
+                    log('Connection error', 'error');
+                    setConnected(false);
                 };
 
                 ws.current.onclose = () => {
                     log('Disconnected', 'error');
                     setConnected(false);
                     setRunning(false);
+                    runningRef.current = false;
                 };
+            };
+
+            const checkForTrade = () => {
+                if (tradingState !== 'IDLE') return;
+                
+                if (stats.profit <= -strategy.stopLoss) {
+                    log(`🛑 Stop loss hit: $${stats.profit.toFixed(2)}`, 'error');
+                    stopBot();
+                    return;
+                }
+                
+                if (stats.profit >= strategy.targetProfit) {
+                    log(`🎯 Target profit reached: $${stats.profit.toFixed(2)}`, 'success');
+                    stopBot();
+                    return;
+                }
+
+                if (currentStake > balance) {
+                    log(`⚠️ Insufficient balance`, 'error');
+                    stopBot();
+                    return;
+                }
+
+                const signal = getSignal();
+                if (signal) {
+                    executeTrade(signal);
+                }
             };
 
             const executeTrade = (type) => {
                 if (tradingState !== 'IDLE') return;
-                if (stats.profit <= -config.stopLoss) { log('Stop loss hit', 'error'); stopBot(); return; }
-                if (stats.profit >= config.targetProfit) { log('Target profit hit', 'success'); stopBot(); return; }
                 
-                setTradingState('BUSY');
-                log(`🚀 ${type} - Stake: $${currentStake.toFixed(2)} (Step: ${martingaleStep})`, 'info');
+                setTradingState('OPENING');
+                log(`🚀 Opening ${type} - Stake: $${currentStake.toFixed(2)} (Step: ${martingaleStep})`, 'info');
                 
                 ws.current.send(JSON.stringify({
                     proposal: 1,
@@ -191,130 +358,282 @@
             };
 
             const startBot = () => {
+                if (!connected) {
+                    log('Please connect first', 'error');
+                    return;
+                }
+                
                 setMartingaleStep(0);
-                setCurrentStake(config.baseStake);
+                setCurrentStake(strategy.baseStake);
                 activeContract.current = null;
                 setTradingState('IDLE');
                 setRunning(true);
-                log('▶️ Bot started', 'success');
+                runningRef.current = true;
+                log('▶️ Bot started!', 'success');
+                if (strategy.martingaleEnabled) {
+                    log(`Martingale: ${strategy.martingaleMultiplier}x, max ${strategy.maxMartingaleSteps} steps`, 'info');
+                }
             };
 
             const stopBot = () => {
                 setRunning(false);
+                runningRef.current = false;
                 setTradingState('IDLE');
                 activeContract.current = null;
                 log('⏸️ Bot stopped', 'info');
             };
 
             const winRate = stats.wins + stats.losses > 0 
-                ? ((stats.wins / (stats.wins + stats.losses)) * 100).toFixed(1) : 0;
+                ? ((stats.wins / (stats.wins + stats.losses)) * 100).toFixed(1)
+                : 0;
+
+            const maxPossibleLoss = strategy.baseStake * 
+                (Math.pow(strategy.martingaleMultiplier, strategy.maxMartingaleSteps + 1) - 1) / 
+                (strategy.martingaleMultiplier - 1);
 
             return (
-                <div className="min-h-screen bg-gray-900 text-white p-6">
-                    <div className="max-w-6xl mx-auto">
-                        <h1 className="text-3xl font-bold mb-6">Deriv Martingale Bot - ONE TRADE AT A TIME</h1>
-                        
-                        {/* Config */}
-                        <div className="bg-gray-800 p-6 rounded mb-6">
-                            <h2 className="text-xl mb-4">Settings</h2>
-                            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
-                                <div>
-                                    <label className="block text-sm mb-1">API Token</label>
-                                    <input type="password" value={apiToken} onChange={e => setApiToken(e.target.value)} 
-                                        className="w-full bg-gray-700 px-3 py-2 rounded" />
-                                </div>
-                                <div>
-                                    <label className="block text-sm mb-1">Base Stake</label>
-                                    <input type="number" value={config.baseStake} 
-                                        onChange={e => setConfig({...config, baseStake: +e.target.value})}
-                                        className="w-full bg-gray-700 px-3 py-2 rounded" />
-                                </div>
-                                <div>
-                                    <label className="block text-sm mb-1">Multiplier</label>
-                                    <select value={config.multiplier} 
-                                        onChange={e => setConfig({...config, multiplier: +e.target.value})}
-                                        className="w-full bg-gray-700 px-3 py-2 rounded">
-                                        <option value="1.5">1.5x</option>
-                                        <option value="2">2x</option>
-                                        <option value="2.5">2.5x</option>
-                                        <option value="3">3x</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-sm mb-1">Max Steps</label>
-                                    <input type="number" value={config.maxSteps} 
-                                        onChange={e => setConfig({...config, maxSteps: +e.target.value})}
-                                        className="w-full bg-gray-700 px-3 py-2 rounded" />
-                                </div>
-                                <div>
-                                    <label className="block text-sm mb-1">Stop Loss</label>
-                                    <input type="number" value={config.stopLoss} 
-                                        onChange={e => setConfig({...config, stopLoss: +e.target.value})}
-                                        className="w-full bg-gray-700 px-3 py-2 rounded" />
-                                </div>
-                                <div>
-                                    <label className="block text-sm mb-1">Target Profit</label>
-                                    <input type="number" value={config.targetProfit} 
-                                        onChange={e => setConfig({...config, targetProfit: +e.target.value})}
-                                        className="w-full bg-gray-700 px-3 py-2 rounded" />
-                                </div>
-                            </div>
+                <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white p-4">
+                    <div className="max-w-7xl mx-auto">
+                        <div className="mb-6">
+                            <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
+                                <Layers size={32} className="text-red-400" />
+                                Deriv Martingale Bot - ONE TRADE AT A TIME
+                            </h1>
+                            <p className="text-slate-400">RSI + MA Strategy with Proper Martingale</p>
+                        </div>
+
+                        {/* WARNING */}
+                        <div className="bg-red-900/40 border-2 border-red-500 rounded-lg p-4 mb-6">
                             <div className="flex gap-3">
-                                {!connected && <button onClick={connect} className="bg-blue-600 px-6 py-2 rounded">Connect</button>}
-                                {connected && !running && <button onClick={startBot} className="bg-green-600 px-6 py-2 rounded">Start</button>}
-                                {running && <button onClick={stopBot} className="bg-red-600 px-6 py-2 rounded">Stop</button>}
+                                <AlertTriangle className="text-red-400 flex-shrink-0" size={24} />
+                                <div className="text-sm">
+                                    <p className="font-bold text-red-400 mb-2 text-lg">⚠️ MARTINGALE RISK ⚠️</p>
+                                    <p className="text-white mb-2">Max loss in {strategy.maxMartingaleSteps} consecutive losses: <span className="font-bold text-red-400">${maxPossibleLoss.toFixed(2)}</span></p>
+                                    <p className="text-slate-200">If you lose {strategy.maxMartingaleSteps} times in a row, you'll lose ${maxPossibleLoss.toFixed(2)} total!</p>
+                                </div>
                             </div>
                         </div>
 
+                        {showSettings && (
+                            <div className="bg-slate-800 rounded-lg p-6 mb-6 border border-slate-700">
+                                <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                                    <Settings size={20} />
+                                    Configuration
+                                </h2>
+                                
+                                <div className="space-y-6">
+                                    <div>
+                                        <label className="block text-sm text-slate-300 mb-2">Deriv Demo API Token</label>
+                                        <input
+                                            type="password"
+                                            value={apiToken}
+                                            onChange={(e) => setApiToken(e.target.value)}
+                                            placeholder="Get from app.deriv.com → Settings → API Token"
+                                            className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
+                                        />
+                                    </div>
+
+                                    <div className="border-t border-slate-600 pt-4">
+                                        <h3 className="font-semibold mb-3 flex items-center gap-2">
+                                            <Layers size={18} className="text-red-400" />
+                                            Martingale Settings
+                                        </h3>
+                                        
+                                        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+                                            <div>
+                                                <label className="block text-sm text-slate-300 mb-2">Base Stake ($)</label>
+                                                <input
+                                                    type="number"
+                                                    value={strategy.baseStake}
+                                                    onChange={(e) => {
+                                                        const val = parseFloat(e.target.value);
+                                                        setStrategy(prev => ({ ...prev, baseStake: val }));
+                                                        setCurrentStake(val);
+                                                    }}
+                                                    className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2"
+                                                    step="0.1"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm text-slate-300 mb-2">Multiplier</label>
+                                                <select
+                                                    value={strategy.martingaleMultiplier}
+                                                    onChange={(e) => setStrategy(prev => ({ 
+                                                        ...prev, 
+                                                        martingaleMultiplier: parseFloat(e.target.value) 
+                                                    }))}
+                                                    className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2"
+                                                >
+                                                    <option value="1.2">1.2x</option>
+                                                    <option value="1.5">1.5x</option>
+                                                    <option value="2">2x</option>
+                                                    <option value="2.5">2.5x</option>
+                                                    <option value="3">3x</option>
+                                                </select>
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm text-slate-300 mb-2">Custom Multiplier</label>
+                                                <input
+                                                    type="number"
+                                                    value={strategy.martingaleMultiplier}
+                                                    onChange={(e) => setStrategy(prev => ({ 
+                                                        ...prev, 
+                                                        martingaleMultiplier: parseFloat(e.target.value) 
+                                                    }))}
+                                                    className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2"
+                                                    step="0.1"
+                                                    min="1.1"
+                                                    max="5"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm text-slate-300 mb-2">Max Steps</label>
+                                                <input
+                                                    type="number"
+                                                    value={strategy.maxMartingaleSteps}
+                                                    onChange={(e) => setStrategy(prev => ({ 
+                                                        ...prev, 
+                                                        maxMartingaleSteps: parseInt(e.target.value) 
+                                                    }))}
+                                                    className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2"
+                                                    min="1"
+                                                    max="10"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm text-slate-300 mb-2">Max Stake ($)</label>
+                                                <input
+                                                    type="number"
+                                                    value={strategy.maxStake}
+                                                    onChange={(e) => setStrategy(prev => ({ 
+                                                        ...prev, 
+                                                        maxStake: parseFloat(e.target.value) 
+                                                    }))}
+                                                    className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm text-slate-300 mb-2">Stop Loss ($)</label>
+                                                <input
+                                                    type="number"
+                                                    value={strategy.stopLoss}
+                                                    onChange={(e) => setStrategy(prev => ({ 
+                                                        ...prev, 
+                                                        stopLoss: parseFloat(e.target.value) 
+                                                    }))}
+                                                    className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label className="block text-sm text-slate-300 mb-2">Target Profit ($)</label>
+                                                <input
+                                                    type="number"
+                                                    value={strategy.targetProfit}
+                                                    onChange={(e) => setStrategy(prev => ({ 
+                                                        ...prev, 
+                                                        targetProfit: parseFloat(e.target.value) 
+                                                    }))}
+                                                    className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2"
+                                                />
+                                            </div>
+
+                                            <div className="flex items-end">
+                                                <label className="flex items-center gap-2 cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={strategy.martingaleEnabled}
+                                                        onChange={(e) => setStrategy(prev => ({ 
+                                                            ...prev, 
+                                                            martingaleEnabled: e.target.checked 
+                                                        }))}
+                                                        className="w-5 h-5"
+                                                    />
+                                                    <span className="text-sm">Enable Martingale</span>
+                                                </label>
+                                            </div>
+                                        </div>
+
+                                        {/* Martingale Preview */}
+                                        <div className="mt-4 p-3 bg-slate-700 rounded">
+                                            <p className="text-xs text-slate-300 mb-2">Stake Progression Preview:</p>
+                                            <div className="flex flex-wrap gap-2 text-xs">
+                                                {Array.from({ length: strategy.maxMartingaleSteps + 1 }, (_, i) => {
+                                                    const stake = Math.min(
+                                                        strategy.baseStake * Math.pow(strategy.martingaleMultiplier, i),
+                                                        strategy.maxStake
+                                                    );
+                                                    return (
+                                                        <span key={i} className={`px-2 py-1 rounded ${
+                                                            i === 0 ? 'bg-green-600' : 
+                                                            i <= 2 ? 'bg-yellow-600' : 'bg-red-600'
+                                                        }`}>
+                                                            Step {i}: ${stake.toFixed(2)}
+                                                        </span>
+                                                    );
+                                                })}
+                                            </div>
+                                            <p className="text-xs text-red-400 mt-2 font-bold">
+                                                ⚠️ Max possible loss in one losing streak: ${maxPossibleLoss.toFixed(2)}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="flex gap-3 mt-6">
+                                    {!connected ? (
+                                        <button
+                                            onClick={connect}
+                                            className="bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded font-semibold"
+                                        >
+                                            Connect to Deriv
+                                        </button>
+                                    ) : (
+                                        <button
+                                            onClick={() => setShowSettings(false)}
+                                            className="bg-green-600 hover:bg-green-700 px-6 py-2 rounded font-semibold"
+                                        >
+                                            Hide Settings
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
                         {/* Stats */}
-                        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-                            <div className="bg-gray-800 p-4 rounded">
-                                <div className="text-sm text-gray-400">Balance</div>
+                        <div className="grid md:grid-cols-5 gap-4 mb-6">
+                            <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                                <div className="flex items-center justify-between mb-2">
+                                    <span className="text-slate-400 text-sm">Balance</span>
+                                    <DollarSign size={18} className="text-green-400" />
+                                </div>
                                 <div className="text-2xl font-bold">${balance.toFixed(2)}</div>
                             </div>
-                            <div className="bg-gray-800 p-4 rounded">
-                                <div className="text-sm text-gray-400">P/L</div>
+
+                            <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                                <div className="flex items-center justify-between mb-2">
+                                    <span className="text-slate-400 text-sm">Profit/Loss</span>
+                                    {stats.profit >= 0 ? <TrendingUp size={18} className="text-green-400" /> : <TrendingDown size={18} className="text-red-400" />}
+                                </div>
                                 <div className={`text-2xl font-bold ${stats.profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                                     {stats.profit >= 0 ? '+' : ''}${stats.profit.toFixed(2)}
                                 </div>
                             </div>
-                            <div className="bg-gray-800 p-4 rounded">
-                                <div className="text-sm text-gray-400">Current Stake</div>
+
+                            <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                                <div className="flex items-center justify-between mb-2">
+                                    <span className="text-slate-400 text-sm">Current Stake</span>
+                                    <Layers size={18} className="text-yellow-400" />
+                                </div>
                                 <div className="text-2xl font-bold">${currentStake.toFixed(2)}</div>
-                                <div className="text-xs text-gray-400">Step: {martingaleStep}</div>
+                                <div className="text-xs text-slate-400">Step: {martingaleStep}</div>
                             </div>
-                            <div className="bg-gray-800 p-4 rounded">
-                                <div className="text-sm text-gray-400">Win Rate</div>
-                                <div className="text-2xl font-bold">{winRate}%</div>
-                                <div className="text-xs text-gray-400">{stats.wins}W / {stats.losses}L</div>
-                            </div>
-                            <div className="bg-gray-800 p-4 rounded">
-                                <div className="text-sm text-gray-400">State</div>
-                                <div className="text-2xl font-bold">{tradingState}</div>
-                                <div className={`w-3 h-3 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400'}`}></div>
-                            </div>
-                        </div>
 
-                        {/* Logs */}
-                        <div className="bg-gray-800 p-4 rounded">
-                            <h3 className="font-bold mb-2">Activity Log</h3>
-                            <div className="space-y-1 max-h-96 overflow-y-auto font-mono text-xs">
-                                {logs.map((l, i) => (
-                                    <div key={i} className={`${
-                                        l.type === 'error' ? 'text-red-400' :
-                                        l.type === 'success' ? 'text-green-400' : 'text-gray-300'
-                                    }`}>
-                                        [{l.time}] {l.msg}
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
-        ReactDOM.render(<DerivBot />, document.getElementById('root'));
-    </script>
-</body>
-</html>
+                            <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                                <div className="flex items-center justify-between mb-2">
+                                    <span className="text-slate-400 text-sm">
